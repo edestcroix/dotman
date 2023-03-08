@@ -75,12 +75,12 @@ def deploy_file(store_dir, dotfile):
             sh.copy(store_path, deploy_path)
         print(f"Deployed {store_path} to {deploy_path}")
 
-def deploy(store_dir, dotfiles, single_file=None):
+def deploy(store_dir, dotfiles: tuple, single_file=None):
     if single_file:
         dotfile = dotfiles[single_file]
         deploy_file(store_dir, dotfile)
     else:
-        for dotfile in dotfiles.values():
+        for dotfile in dotfiles:
             deploy_file(store_dir, dotfile)
 
 
@@ -105,19 +105,19 @@ def retreive_file(store_dir, dotfile):
         print(f"Retreived {temp_souce} as {temp_store}")
 
 
-def retreive(store_dir, dotfiles, single_file=None):
+def retreive(store_dir, dotfiles: tuple, single_file=None):
     store_dir = os.path.expanduser(store_dir)
     if single_file:
         retreive_file(store_dir, dotfiles[single_file])
     else:
-        for dotfile in dotfiles.values():
+        for dotfile in dotfiles:
             retreive_file(store_dir, dotfile)
 
 
 def diff(store_dir, dotfiles):
     store_dir = os.path.expanduser(store_dir)
     are_diffs = False
-    for dotfile in dotfiles.values():
+    for dotfile in dotfiles:
         store_path = f"{store_dir}/{dotfile['store_name']}"
         source_path = os.path.expanduser(dotfile['source_path'])
         if not os.path.exists(store_path):
@@ -156,6 +156,25 @@ def list(store_dir, dotfiles):
         printsingle("] ")
         printsingle(f"{short_store_dir}/{dotfile['store_name']} <->")
         print(f" {dotfile['source_path']} ")
+
+
+def clean(store_dir, dotfiles, ignored):
+    files = os.listdir(os.path.expanduser(store_dir))
+    cleaned = False
+    is_dir  = False
+    for file in files:
+        file, is_dir = (f"{file}/", True) if os.path.isdir(file) else (file, False)
+        # check if file is in a store_name value in dotfiles
+        if file == ".git/" or file in ignored: 
+            print(f"Skipping {file}")
+            continue
+        if (
+            file not in [dotfile['store_name'] for dotfile in dotfiles.values()]
+            and input(f"Remove unmanaged {'directory' if is_dir else 'file'} {file}? (y/N)") == 'y'
+        ):
+            sh.rmtree(f"{store_dir}/{file}")
+            cleaned = True
+    print("Cleaned up unmanaged files" if cleaned else "No unmanaged files found")
         
             
 def main():
@@ -173,23 +192,25 @@ def main():
         print("Cannot deploy and retreive at the same time")
         exit(1)
 
-    config_file = args.config or CONFIG_PATH
-    config = ConfigDict(config_file)
-
-    if args.deploy and args.deploy.lower() != "all":
-        deploy(config["store_dir"], config["dotfiles"], args.deploy)
-    elif args.deploy:
-        deploy(config["store_dir"], config["dotfiles"])
-    elif args.retreive and args.retreive.lower() != "all":
-        retreive(config["store_dir"], config["dotfiles"], args.retreive)
+    config = ConfigDict(args.config or CONFIG_PATH)
+    # already checked that deploy and retreive are not both set,
+    # so only one of them can have a specified file
+    dotfile = (args.deploy or args.retreive) or "all"
+    # if dotfile is all operate on all dotfiles, otherwise only the one specified
+    files = tuple(config["dotfiles"].values()) if dotfile == "all" else (config[f'dotfiles.{dotfile}'], )
+    if args.deploy:
+        deploy(config["store_dir"], files)
     elif args.retreive:
-        retreive(config["store_dir"], config["dotfiles"])
+        retreive(config["store_dir"], files)
 
     if args.diff:
         diff(config["store_dir"], config["dotfiles"])
 
     if args.list:
         list(config["store_dir"], config["dotfiles"])
+
+    if args.clean:
+        clean(config["store_dir"], config["dotfiles"], config['ignored_files'])
 
 if __name__ == "__main__":
     main()
