@@ -52,7 +52,6 @@ def confirm_overwrite(dir_one, dir_two):
     return True
 
 
-
 def deploy_file(store_dir, dotfile):
     deploy_path = os.path.expanduser(dotfile['source_path'])
     store_path = f"{os.path.expanduser(store_dir)}/" + dotfile['store_name']
@@ -136,7 +135,7 @@ def diff(store_dir, dotfiles):
 
 def list(store_dir, dotfiles):
     # iterate through dotfiles, check if they are currenty stored, and if deploy is true
-    printsingle = lambda x: print(x, end="")
+    print_s = lambda x: print(x, end="")
 
     name_width = max(len(dotfile['store_name']) for dotfile in dotfiles.values())
     short_store_dir = store_dir
@@ -148,19 +147,20 @@ def list(store_dir, dotfiles):
         store_path = f"{store_dir}/{dotfile['store_name']}"
         is_stored = os.path.exists(store_path)
         changes_pending = newer(store_path, os.path.expanduser(dotfile['source_path']))
-        printsingle('*' if changes_pending else ' ')
-        printsingle(f"{dotfile['store_name']:{name_width}} ")
-        printsingle("[")
-        printsingle("s" if is_stored else " ")
-        printsingle("d" if dotfile['deploy'] else " ")
-        printsingle("] ")
-        printsingle(f"{short_store_dir}/{dotfile['store_name']} <->")
+        print_s('*' if changes_pending else ' ')
+        print_s(f"{dotfile['store_name']:{name_width}} ")
+        print_s("[")
+        print_s("s" if is_stored else " ")
+        print_s("d" if dotfile['deploy'] else " ")
+        print_s("] ")
+        print_s(f"{short_store_dir}/{dotfile['store_name']} <->")
         print(f" {dotfile['source_path']} ")
 
 
 def clean(store_dir, dotfiles, ignored):
     files = os.listdir(os.path.expanduser(store_dir))
-    cleaned = False
+    store_path = os.path.expanduser(store_dir)
+    cleaned = 0
     is_dir  = False
     for file in files:
         file, is_dir = (f"{file}/", True) if os.path.isdir(file) else (file, False)
@@ -170,11 +170,12 @@ def clean(store_dir, dotfiles, ignored):
             continue
         if (
             file not in [dotfile['store_name'] for dotfile in dotfiles.values()]
-            and input(f"Remove unmanaged {'directory' if is_dir else 'file'} {file}? (y/N)") == 'y'
+            and input(f"Remove unmanaged {'directory' if is_dir else 'file'} {file}? (y/N): ") == 'y'
         ):
-            sh.rmtree(f"{store_dir}/{file}")
-            cleaned = True
-    print("Cleaned up unmanaged files" if cleaned else "No unmanaged files found")
+            print(f"Removing {store_path}/{file}")
+            sh.rmtree(f"{store_path}/{file}") if is_dir else os.remove(f"{store_path}/{file}")
+            cleaned += 1
+    print(f"Cleaned up {cleaned} unmanaged files" if cleaned else "Nothing to do")
         
             
 def main():
