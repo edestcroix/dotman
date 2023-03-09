@@ -10,7 +10,7 @@ pip3 install ./dist/dotman-0.0.1-py3-none-any.whl
 ```
 
 ## Usage
-`dotman` reads it's config from a `.config/dotman/config.json` file to determine which files to manage. It does not create this file for you, so you must create it yourself.
+`dotman` reads its config from a `.config/dotman/config.json` file to determine which files to manage. It does not create this file for you, so you must create it yourself.
 
 ### Config
 The configuration file is a JSON file with the following structure:
