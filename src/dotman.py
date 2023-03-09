@@ -2,6 +2,7 @@
 
 import os
 import argparse
+import re
 import shutil as sh
 import json
 import subprocess as sp
@@ -41,6 +42,16 @@ class ConfigDict():
         self.__set_key = None
 
 
+    def flat_dotfiles(self):
+        # return a dict with all dotfiles
+        dotfiles = self.__config['dotfiles']
+        # flatten the dict, to remove catagories
+        flat_dotfiles = {}
+        for catagory in dotfiles.keys():
+            flat_dotfiles |= dotfiles[catagory]
+        return flat_dotfiles
+
+
 def newer(dir_one, dir_two):
     diff = sp.run(["diff", "-q", dir_one, dir_two], capture_output=True)
     return diff.returncode == 1 and os.path.getmtime(
@@ -61,171 +72,161 @@ def confirm_overwrite(dir_one, dir_two):
     return True
 
 
-def deploy_file(store_dir, dotfile):
-    deploy_path = os.path.expanduser(dotfile['source_path'])
-    store_path = f"{os.path.expanduser(store_dir)}/" + dotfile['store_name']
-    if not os.path.exists(store_path):
-        print(f"Cannot deploy {store_path} because it does not exist")
-    elif dotfile["deploy"]:
-        # check if deployed files have been modified after the stored ones
-        # do a diff and ask if the user wants to overwrite the deployed files
-        if not confirm_overwrite(deploy_path, store_path):
-            return
-        if dotfile['is_dir']:
-            if os.path.exists(deploy_path):
-                sh.rmtree(deploy_path)
-            sh.copytree(store_path, deploy_path)
-        else:
-            if os.path.exists(deploy_path):
-                os.remove(deploy_path)
-            # get the directory of the file, and create if it doesn't exits 
-            os.makedirs(os.path.dirname(deploy_path), exist_ok=True)
-            sh.copy(store_path, deploy_path)
-        print(f"Deployed {store_path} to {deploy_path}")
-
-def deploy(store_dir, dotfiles: tuple, ignored=()):
-    for dotfile in dotfiles:
-        if dotfile['store_name'] in ignored:
-            print(f"Skipping {dotfile['store_name']}")
+def deploy(store_dir, dotfiles, ignored=()):
+    for catagory in dotfiles.keys():
+        if not os.path.exists(os.path.join(store_dir, catagory)):
+            print(f"Skipping {catagory} because it has not been retreived")
             continue
-        deploy_file(store_dir, dotfile)
+        cur_dotfiles = dotfiles[catagory]
+        for dotfile in cur_dotfiles.keys():
+            if dotfile in ignored:
+                continue
+            store_path = os.path.join(store_dir, catagory, dotfile)
+            deploy_path = os.path.expanduser(cur_dotfiles[dotfile])
+            
+            deploy_dir = os.path.dirname(deploy_path)
+            if confirm_overwrite(deploy_path, store_path):
+                if not os.path.exists(deploy_dir):
+                    os.makedirs(deploy_dir, exist_ok=True)
+                    sh.copytree(store_path, deploy_path, dirs_exist_ok=True)
+                    print(f"Deployed {dotfile} to {deploy_path}")
+                elif os.path.isfile(store_path):
+                    sh.copyfile(store_path, deploy_path)
+                    print(f"Deployed {dotfile} to {deploy_path}")
+                else:
+                    print(f"Cannot deploy {dotfile} because it does not exist")
 
 
-def retreive_file(store_dir, dotfile):
-    source_path = os.path.expanduser(dotfile['source_path'])
-    store_path = f"{store_dir}/{dotfile['store_name']}"
-    if not os.path.exists(source_path):
-        print(f"Cannot retreive {source_path} because it does not exist")
+def retreive_file(dotfile, store_path, retreive_path):
+    if os.path.exists(retreive_path):
+        if os.path.isdir(retreive_path):
+            sh.copytree(retreive_path, store_path, dirs_exist_ok=True)
+        elif os.path.isfile(retreive_path):
+            sh.copy(retreive_path, store_path)
     else:
-        os.makedirs(store_dir, exist_ok=True)
-        if dotfile['is_dir']:
-            if os.path.exists(store_path):
-                if os.path.isdir(store_path):
-                    sh.rmtree(store_path)
-                else: os.remove(store_path)
-            sh.copytree(source_path, store_path)
-        else:
-            sh.copy(source_path, store_path)
-       # shorten user home directory to ~ 
-        temp_souce = source_path.replace(os.path.expanduser("~"), "~")
-        temp_store = store_path.replace(os.path.expanduser("~"), "~")
-        print(f"Retreived {temp_souce} as {temp_store}")
+        print(f"Cannot retreive {dotfile} because {retreive_path} does not exist")
+    print(f"Retreived {dotfile} from {retreive_path}")
 
 
-def retreive(store_dir, dotfiles: tuple, ignored=()):
-    store_dir = os.path.expanduser(store_dir)
-    for dotfile in dotfiles:
-        if dotfile['store_name'] in ignored:
-            print(f"Skipping {dotfile['store_name']}")
-            continue
-        retreive_file(store_dir, dotfile)
+def retreive(store_dir: str, dotfiles: dict, ignored=()):
+    for catagory, cur_dotfiles in dotfiles.items():
+        os.makedirs(os.path.join(store_dir, catagory), exist_ok=True)
+        for dotfile in cur_dotfiles.keys():
+            # chech if the dotfile has a file extension when it's path is a directory
+            if dotfile in ignored:
+                print(f"Skipping {dotfile}")
+                continue
+            store_path = os.path.join(store_dir, catagory, dotfile)
+            retreive_path = os.path.expanduser(cur_dotfiles[dotfile])
+            retreive_file(dotfile, store_path, retreive_path)
 
 
 def diff(store_dir, dotfiles, ignored=()):
     store_dir = os.path.expanduser(store_dir)
     are_diffs = False
-    for dotfile in dotfiles:
-        if dotfile['store_name'] in ignored:
-            print(f"Skipping {dotfile['store_name']}")
-            continue
-        store_path = f"{store_dir}/{dotfile['store_name']}"
-        source_path = os.path.expanduser(dotfile['source_path'])
-        if not os.path.exists(store_path):
-            print(f"Cannot diff {store_path} because it does not exist")
-            continue
-        if not os.path.exists(source_path):
-            print(f"Cannot diff {source_path} because it does not exist")
-            continue
-        diff = sp.run(["diff", "-u", source_path, store_path], capture_output=True)
-        if diff.returncode == 1:
-            are_diffs = True
-            print(diff.stdout.decode("utf-8"))
+    for catagory, cur_dotfiles in dotfiles.items():
+        for name, path in cur_dotfiles.items():
+            if name in ignored:
+                print(f"Skipping {name}")
+                continue
+            store_path = f"{store_dir}/{catagory}/{name}"
+            source_path = os.path.expanduser(path)
+            if not os.path.exists(store_path):
+                print(f"Cannot diff {store_path} because it does not exist")
+                continue
+            if not os.path.exists(source_path):
+                print(f"Cannot diff {source_path} because it does not exist")
+                continue
+            diff = sp.run(["diff", "-u", source_path, store_path], capture_output=True)
+            if diff.returncode == 1:
+                are_diffs = True
+                print(diff.stdout.decode("utf-8"))
     if not are_diffs:
         print("All dotfiles are up to date")
 
 
-def list(store_dir, dotfiles):
+def list(store_dir, dotfiles, flat_dotfiles):
     # iterate through dotfiles, check if they are currenty stored, and if deploy is true
     print_s = lambda x: print(x, end="")
 
-    name_width = max(len(dotfile['store_name']) for dotfile in dotfiles.values())
-    short_store_dir = store_dir
-    store_dir = os.path.expanduser(store_dir)
+    name_width = max(len(name) for name in flat_dotfiles.keys())
+    dir_buf = 2
 
-    print(f"Managed dotfiles ({len(dotfiles)}):")
+    # remove user portion, can be /home/user or /var/home/user
+    short_store_dir = re.sub(r'^.*/home/[^/]+', "~", store_dir)
+
+    print(f"Managed dotfiles ({len(flat_dotfiles)}/{len(dotfiles)}):")
     print("-" * (name_width + 60))
-    for dotfile in dotfiles.values():
-        store_path = f"{store_dir}/{dotfile['store_name']}"
-        is_stored = os.path.exists(store_path)
-        changes_pending = newer(store_path, os.path.expanduser(dotfile['source_path']))
-        print_s('*' if changes_pending else ' ')
-        print_s(f"{dotfile['store_name']:{name_width}} ")
-        print_s("[")
-        print_s("s" if is_stored else " ")
-        print_s("d" if dotfile['deploy'] else " ")
-        print_s("] ")
-        print_s(f"{short_store_dir}/{dotfile['store_name']} <->")
-        print(f" {dotfile['source_path']} ")
+    space = 0
 
+    for catagory, cur_dotfiles in dotfiles.items():
+        print(f"{catagory}:")
+        cur_store_dir = os.path.join(store_dir, catagory)
+        for name, path in cur_dotfiles.items(): 
+            store_path = os.path.join(cur_store_dir, name)
+            d_name = f'{name}/' if os.path.isdir(store_path) else name
+            deploy_path = os.path.expanduser(path)
+            is_stored = os.path.exists(store_path)
+            unstored_changes = newer(deploy_path, store_path)
+            undeployed_changes = newer(store_path, deploy_path)
+            if unstored_changes:
+                space += 1
+            if undeployed_changes:
+                space += 1
+            print_s(f"  {name:{name_width}} ")
+            print_s("[")
+            print_s("s" if is_stored else " ")
+            print_s("!" if unstored_changes else '')
+            print_s("*" if undeployed_changes else '')
+            print_s(f"{']':{dir_buf - space}}")
+            print_s(f" {short_store_dir}/{catagory}/{d_name}")
+            print(f" -> {re.sub(r'^.*/home/[^/]+', '~', deploy_path)}")
+            space = 0
 
-def clean(store_dir, dotfiles, ignored):
-    files = os.listdir(os.path.expanduser(store_dir))
-    store_path = os.path.expanduser(store_dir)
-    cleaned = 0
-    is_dir  = False
+def confirm_bulk_clean(dir, files):
+    print("Removing untracked files:")
     for file in files:
-        # check if file is in a store_name value in dotfiles
-        if file == (".git") or file in ignored: 
-            print(f"Skipping {'directory ' if os.path.isdir(file) else 'file '}{file}")
-            continue
-        if (
-            file not in [dotfile['store_name'] for dotfile in dotfiles.values()]
-            and input(f"Remove unmanaged {'directory' if is_dir else 'file'} {file}? (y/N): ") == 'y'
-        ):
-            print(f"Removing {store_path}/{file}")
-            sh.rmtree(f"{store_path}/{file}") if is_dir else os.remove(f"{store_path}/{file}")
+        print(f"{dir}/{file}")
+    return input("Are you sure you want to do this? [y/N] ").lower() in ["y", "yes"]
+
+def clean_file_set(store_dir, to_clean, always_yes, catagory=""):
+    cleaned = 0
+    for file in to_clean:
+        if always_yes or input(f"Remove untracked file {catagory}/{file}? [y/N] ").lower() in ["y", "yes"]:
+            print(f"Removing {catagory}/{file}")
+            if os.path.isdir(os.path.join(store_dir, catagory, file)):
+                sh.rmtree(os.path.join(store_dir, catagory, file))
+            else:
+                os.remove(os.path.join(store_dir, catagory, file))
             cleaned += 1
-    print(f"Cleaned up {cleaned} unmanaged files" if cleaned else "Nothing to do")
-        
+    return cleaned
 
-def get_args():
+def clean(store_dir, dotfiles, ignored, always_yes=False):
+    ignored.append('.git')
+    cleaned = 0
+    get_untracked = lambda dir, files : [file for file in dir if file not in files and file not in ignored]
+    for catagory in dotfiles.keys():
+        try:
+            dir_files = os.listdir(os.path.join(store_dir, catagory))
+        except FileNotFoundError:
+            continue
+        untracked = get_untracked(dir_files, dotfiles[catagory].keys())
+        if untracked and always_yes and not confirm_bulk_clean(catagory, untracked):
+            continue
 
-    parser = argparse.ArgumentParser(description="Dotman is a tool for managing dotfiles")
-    parser.add_argument("-c", "--config", help="Specify config file", action="store")
-    parser.add_argument("-C", "--clean", help="Remove unmanaged dotfiles", action="store_true")
-    parser.add_argument("-l", "--list", help="List managed dotfiles", action="store_true")
-    subparsers = parser.add_subparsers(dest="subparser_name")
+        cleaned += clean_file_set(store_dir, untracked, always_yes, catagory)
+        # check root dir too
+    root_dir_files = os.listdir(store_dir)
+    untracked = get_untracked(root_dir_files, dotfiles.keys())
+    if untracked and always_yes and not confirm_bulk_clean('.', untracked):
+        return
 
-    deploy_parser = subparsers.add_parser("deploy")
-    deploy_parser.add_argument("-a", "--all", help="Deploy all dotfiles", action="store_true")
-    deploy_parser.add_argument("-f", "--file", help="Deploy a specific dotfile", action="store")
-    deploy_parser.add_argument("-i", "--ignore", help="Ignore a specific dotfile", action="store")
-
-    retreive_parser = subparsers.add_parser("retreive")
-    retreive_parser.add_argument("-a", "--all", help="Retreive all dotfiles", action="store_true")
-    retreive_parser.add_argument("-f", "--file", help="Retreive a specific dotfile", action="store")
-    retreive_parser.add_argument("-i", "--ignore", help="Ignore a specific dotfile", action="store")
-
-    diff_parser = subparsers.add_parser("diff")
-    diff_parser.add_argument("-a", "--all", help="Diff all dotfiles", action="store_true")
-    diff_parser.add_argument("-f", "--file", help="Diff a specific dotfile", action="store")
-    diff_parser.add_argument("-i", "--ignore", help="Ignore a specific dotfile", action="store")
-
-
-    git_parser = subparsers.add_parser("git")
-    git_parser.add_argument("-a", "--add", help="Add dotfiles to dotfile repo", action="store", default="")
-    git_parser.add_argument('-r', "--restore", help="restore staged dotfiles", action="store", default='')
-    git_parser.add_argument("-c", "--commit", help="commit dotfiles to dotfile repo", action="store", type=str)
-    git_parser.add_argument("-p", "--push", help="push dotfiles to dotfile repo", action="store_true")
-    git_parser.add_argument("-s", "--status", help="show git status of dotfile repo", action="store_true")
-    git_parser.add_argument("-C", "--command", help="run specific git command", action="store")
-    # add diff argument
-    git_parser.add_argument("-d", "--diff", help="show git diff of dotfile repo", action="store_true")
-
-    return parser.parse_args()
+    cleaned += clean_file_set(store_dir, untracked, always_yes)
+    
+    print(f"Cleaned {cleaned} file{'s' if cleaned > 1 else ''}") if cleaned > 0 else print("Nothing to clean")
 
 
-def git(store_dir, action, commit_msg='dotman commit', override_cmd='', add='.'):
+def git(store_dir, action, commit_msg='dotman commit', override_cmd='', add='.', ssh_path=''):
     git_path = os.path.expanduser(f"{store_dir}")
     if action == Git.ADD:
         sp.run(["git", "-C", git_path, "add", *add.split(' ')])
@@ -239,7 +240,9 @@ def git(store_dir, action, commit_msg='dotman commit', override_cmd='', add='.')
         output = sp.run(["git", "-C", git_path, "push"], capture_output=True)
         check = output.stderr.decode('utf-8')
         if "Permission denied (publickey)" in check:
-            if ssh_key := input(
+            if ssh_path:
+                sp.run(["ssh-add", os.path.expanduser(ssh_path)])
+            elif ssh_key := input(
                 "SSH key not found, please enter path to ssh key: "
             ):
                 sp.run(["ssh-add", os.path.expanduser(ssh_key)])
@@ -258,50 +261,100 @@ def git(store_dir, action, commit_msg='dotman commit', override_cmd='', add='.')
             print(git.stdout)
 
 
-def git_action(config, args):
+def git_action(store_dir, args, ssh=''):
     # add, commit, and push can be specified together,
     # all others are mutually exclusive
     if args.add and args.commit:
-        git(config['store_dir'], Git.ADD, add=args.add)
-        git(config['store_dir'], Git.COMMIT, commit_msg=args.commit)
+        git(store_dir, Git.ADD, add=args.add)
+        git(store_dir, Git.COMMIT, commit_msg=args.commit)
         if args.push:
-            git(config['store_dir'], Git.PUSH)
+            git(store_dir, Git.PUSH)
 
     elif args.commit:
-        git(config['store_dir'], Git.COMMIT, commit_msg=args.commit)
+        git(store_dir, Git.COMMIT, commit_msg=args.commit)
     elif args.status:
-        git(config['store_dir'], Git.STATUS)
+        git(store_dir, Git.STATUS)
     elif args.push:
-        git(config['store_dir'], Git.PUSH)
+        git(store_dir, Git.PUSH, ssh_path=ssh)
     elif args.command:
-        git(config['store_dir'], Git.CUSTOM, override_cmd=args.command)
+        git(store_dir, Git.CUSTOM, override_cmd=args.command)
     elif args.diff:
-        git(config['store_dir'], Git.CUSTOM, override_cmd='diff')
+        git(store_dir, Git.CUSTOM, override_cmd='diff')
     elif args.add:
-        git(config['store_dir'], Git.ADD, add=args.add)
+        git(store_dir, Git.ADD, add=args.add)
     elif args.restore:
-        git(config['store_dir'], Git.CUSTOM, override_cmd=f'restore --staged {args.restore}')
+        git(store_dir, Git.CUSTOM, override_cmd=f'restore --staged {args.restore}')
             
+
+def get_args():
+
+    parser = argparse.ArgumentParser(description="Dotman is a tool for managing dotfiles")
+    parser.add_argument("-c", "--config", help="Specify config file", action="store")
+    parser.add_argument("-l", "--list", help="List managed dotfiles", action="store_true")
+    subparsers = parser.add_subparsers(dest="subparser_name")
+
+    deploy_parser = subparsers.add_parser("deploy")
+    deploy_parser.add_argument("-a", "--all", help="Deploy all dotfiles", action="store_true")
+    deploy_parser.add_argument("-f", "--file", help="Deploy a specific dotfile", action="store")
+    deploy_parser.add_argument("-i", "--ignore", help="Ignore a specific dotfile", action="store")
+
+    retreive_parser = subparsers.add_parser("retreive")
+    retreive_parser.add_argument("-a", "--all", help="Retreive all dotfiles", action="store_true")
+    retreive_parser.add_argument("-f", "--file", help="Retreive a specific dotfile", action="store")
+    retreive_parser.add_argument("-i", "--ignore", help="Ignore a specific dotfile", action="store")
+
+    diff_parser = subparsers.add_parser("diff")
+    diff_parser.add_argument("-a", "--all", help="Diff all dotfiles", action="store_true")
+    diff_parser.add_argument("-f", "--file", help="Diff a specific dotfile", action="store")
+    diff_parser.add_argument("-i", "--ignore", help="Ignore a specific dotfile", action="store")
+
+    clean_parser = subparsers.add_parser("clean")
+    clean_parser.add_argument("-a", "--all", help="Clean all dotfiles", action="store_true")
+
+
+    git_parser = subparsers.add_parser("git")
+    git_parser.add_argument("-a", "--add", help="Add dotfiles to dotfile repo", action="store", default="")
+    git_parser.add_argument('-r', "--restore", help="restore staged dotfiles", action="store", default='')
+    git_parser.add_argument("-c", "--commit", help="commit dotfiles to dotfile repo", action="store", type=str)
+    git_parser.add_argument("-p", "--push", help="push dotfiles to dotfile repo", action="store_true")
+    git_parser.add_argument("-s", "--status", help="show git status of dotfile repo", action="store_true")
+    git_parser.add_argument("-C", "--command", help="run specific git command", action="store")
+    # add diff argument
+    git_parser.add_argument("-d", "--diff", help="show git diff of dotfile repo", action="store_true")
+
+    return parser.parse_args()
+
+
 def main():
     args = get_args()
 
     config = ConfigDict(args.config or CONFIG_PATH)
-
-    select_files = lambda x: tuple(config['dotfiles'].values()) if x else (config[f'dotfiles.{args.file}'], )
+    store_dir = os.path.expanduser(config['store_dir'])
 
     if args.subparser_name is None:
-        if args.clean: 
-            clean(config['store_dir'], config["dotfiles"], config['ignored'])
-        elif args.list:
-            list(config['store_dir'], config["dotfiles"])
+        if args.list:
+            list(store_dir, config["dotfiles"], config.flat_dotfiles())
     elif args.subparser_name == "git":
-        git_action(config, args)
-
+        ssh = config["git"]["ssh_key_path"] if "ssh_key_path" in config["git"] else ''
+        git_action(store_dir, args, ssh)
+    elif args.subparser_name == "clean":
+        clean(store_dir, config["dotfiles"], config["ignored_files"], args.all)
     else:
-        actions = {'deploy': deploy, 'retreive': retreive, 'diff': diff}
-        files = select_files (args.all or (args.file is None))
+        actions = {"deploy": deploy, "retreive": retreive, "diff": diff}
+
+        # if args.files is specified, filter out the dotfiles dict to only contain
+        # the specified files, still in the same catagories
+        if file := args.file:
+            file = file.split(',')
+            dotfiles = {
+                catagory: {k: v for k, v in dotfiles_set.items() if k in file}
+                for catagory, dotfiles_set in config['dotfiles'].items()
+            }
+        else:
+            dotfiles = config['dotfiles']
+
         ignored = args.ignore.split(',') if args.ignore else []
-        actions[args.subparser_name](config['store_dir'], files, ignored)
+        actions[args.subparser_name](store_dir, dotfiles, ignored=ignored)
 
 
 if __name__ == "__main__":
