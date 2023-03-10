@@ -39,6 +39,7 @@ The configuration file is a JSON file with the following structure:
 Currently, at least one category must be defined. Files will be stored in directories named after the category they are in,
 under the filename specified by their key in the config file.
 (eg. `dotfiles/category1/file1`). Files can be either regular files or directories, and file paths can be absolute or relative to the user's home directory (prefixed with '`~/`').
+"ignored_files" is for specified files in the dotfiles directory that dotman should ignore. `.git/` is always ignored implicitly.
 
 ### Commands
 `dotman` has the following commands:
@@ -47,7 +48,7 @@ under the filename specified by their key in the config file.
 - `dotman deploy` - deploys all files in the config file to their respective locations, overwriting any existing files.
     - `-a` or `--all` - deploys all files. This is the default behaviour when no files are specified.
     - `-f` or `--file` - deploys the specified file. For multiple files, pass a comma-separated list of files.
-    - `-i` or `--ignore` - ignore the specified file. For multiple files, pass a space-separated list of files. (Yes, this is inconsistent with the `-f` flag, I'll fix it later)
+    - `-i` or `--ignore` - ignore the specified file. For multiple files, pass a comma-separated list of files.
 - `dotman retrieve` - retrieves all files in the config file from their respective locations, overwriting any existing files. It supports the same flags as `dotman deploy`.
 - `dotman diff` - shows the differences between the stored files and the deployed files. It supports the same flags as `dotman deploy` and `dotman retrieve`.
 - `dotman clean` Cleans up the store directory, removing any files that are not in the config file. Confirms deletion for each file one by one, unless `-a` or `--all` is specified, in which case it will confirm once for each category.
