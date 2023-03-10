@@ -70,9 +70,12 @@ def confirm_overwrite(dir_one, dir_two):
     return True
 
 
+def collapse_user(string):
+    return re.sub(r"^.*/home/[^/]+", "~", string)
+
 def copy_file(src, dest, pad_out=0):
-    trim_src = re.sub(r"^.*/home/[^/]+", "~", src)
-    trim_dest = re.sub(r"^.*/home/[^/]+", "~", dest)
+    trim_src = collapse_user(src)
+    trim_dest = collapse_user(dest)
     if os.path.exists(src):
         if not os.path.exists(dirnm := os.path.dirname(dest)):
             os.makedirs(dirnm)
@@ -92,7 +95,7 @@ def copy_file(src, dest, pad_out=0):
 def longest_dir_len(dirs):
     # get the longest string from the first element of
     # each tuple in dirs
-    dirs = (re.sub(r"^.*/home/[^/]+", "~", dir[0]) for dir in dirs)
+    dirs = (collapse_user(dir[0]) for dir in dirs)
     return max(len(s) for s in dirs)
 
 
@@ -161,7 +164,7 @@ def diff(store_dir, dotfiles, ignored=()):
         print("All dotfiles are up to date")
 
 
-def list(store_dir, dotfiles, flat_dotfiles):
+def list_dotfiles(store_dir, dotfiles, flat_dotfiles):
     # iterate through dotfiles, check if they are currenty stored, and if deploy is true
     print_s = lambda x: print(x, end="")
 
@@ -193,57 +196,58 @@ def list(store_dir, dotfiles, flat_dotfiles):
             print(f" -> {re.sub(r'^.*/home/[^/]+', '~', deploy_path)}")
 
 
-def confirm_bulk_clean(dir, files):
-    print("Removing untracked files:")
-    for file in files:
-        print(f"{dir}/{file}")
-    return input("Are you sure you want to do this? [y/N] ").lower() in ["y", "yes"]
-
-
-def clean_file_set(store_dir, to_clean, always_yes, catagory=""):
+def clean_file_set(store_dir, to_clean, always_yes):
     cleaned = 0
     for file in to_clean:
+        short_file = collapse_user(file)
         if always_yes or input(
-            f"Remove untracked file {catagory}/{file}? [y/N] "
+            f"Remove untracked file {short_file}? (y/N): "
         ).lower() in ["y", "yes"]:
-            print(f"Removing {catagory}/{file}")
-            if os.path.isdir(os.path.join(store_dir, catagory, file)):
-                sh.rmtree(os.path.join(store_dir, catagory, file))
+            print(f"Removing {short_file}")
+            if os.path.isdir(os.path.join(store_dir, file)):
+                sh.rmtree(os.path.join(store_dir, file))
             else:
-                os.remove(os.path.join(store_dir, catagory, file))
+                os.remove(os.path.join(store_dir, file))
             cleaned += 1
-    return cleaned
+    print(f"Removed {cleaned} untracked files")
 
 
-def clean(store_dir, dotfiles, ignored, always_yes=False):
+def get_untracked(store_dir, dir, ignored):
+        return [f"{store_dir}/{file}" for file in dir if file not in ignored]
+
+def clean(store_dir, dotfiles, ignored, all_one_shot=False, verbose=False):
     ignored.append(".git")
-    cleaned = 0
-    get_untracked = lambda dir, files: [
-        file for file in dir if file not in files and file not in ignored
-    ]
+    untracked = []
     for catagory in dotfiles.keys():
         try:
             dir_files = os.listdir(os.path.join(store_dir, catagory))
         except FileNotFoundError:
             continue
-        untracked = get_untracked(dir_files, dotfiles[catagory].keys())
-        if untracked and always_yes and not confirm_bulk_clean(catagory, untracked):
-            continue
+        cur_ignored = ignored + list(dotfiles[catagory].keys())
+        untracked += get_untracked(f"{store_dir}/{catagory}", dir_files, cur_ignored)
 
-        cleaned += clean_file_set(store_dir, untracked, always_yes, catagory)
-        # check root dir too
-    root_dir_files = os.listdir(store_dir)
-    untracked = get_untracked(root_dir_files, dotfiles.keys())
-    if untracked and always_yes and not confirm_bulk_clean(".", untracked):
-        return
+    cur_ignored = ignored + list(dotfiles.keys())
+    untracked += get_untracked(store_dir, os.listdir(store_dir), cur_ignored)
 
-    cleaned += clean_file_set(store_dir, untracked, always_yes)
+    if verbose:
+        print("Ignored files:")
+        for file in ignored:
+            print(file)
 
-    print(
-        f"Cleaned {cleaned} file{'s' if cleaned > 1 else ''}"
-    ) if cleaned > 0 else print("Nothing to clean")
+    if all_one_shot and untracked:
+        print("Removing untracked files:")
+        for file in untracked:
+            print(collapse_user(file))    
+        if input("Are you sure (y/N): ").lower() in ('y' or 'yes'):
+            clean_file_set(store_dir, untracked, True)
+    elif untracked: 
+        clean_file_set(store_dir, untracked, False)
+    else:
+        print("No untracked files to clean")
 
 
+
+# TODO: Clean up the git functions
 def git(
     store_dir, action, commit_msg="dotman commit", override_cmd="", add=".", ssh_path=""
 ):
@@ -330,10 +334,10 @@ def get_args():
         add_arg("--file", help="Operate on a specific dotfile", action="store")
         add_arg("--ignore", help="Ignore a specific dotfile", action="store")
 
-    # TODO: Clean should be added to the for loop above, and given
-    # same functionality as deploy, retreive, and diff
     cur_parser = subparsers.add_parser("clean")
     add_arg("--all", help="Clean all dotfiles", action="store_true")
+    add_arg("--ignore", help="Ignore specific dotfiles", action="store")
+    add_arg("--verbose", help="Show ignored files", action="store_true")
 
     cur_parser = subparsers.add_parser("git")
     add_arg("--add", help="Add dotfiles to dotfile repo", action="store", default="")
@@ -360,7 +364,7 @@ def main():
 
     if args.subparser_name is None:
         if args.list:
-            list(store_dir, config["dotfiles"], config.flat_dotfiles())
+            list_dotfiles(store_dir, config["dotfiles"], config.flat_dotfiles())
     elif args.subparser_name == "git":
         ssh = (
             config["git"]["ssh_key_path"]
@@ -369,7 +373,9 @@ def main():
         )
         git_action(store_dir, args, ssh)
     elif args.subparser_name == "clean":
-        clean(store_dir, config["dotfiles"], config["ignored_files"], args.all)
+        ignore = args.ignore.split(",") if args.ignore else []
+        ignore = ignore + config["ignored_files"]
+        clean(store_dir, config["dotfiles"], ignore, args.all, args.verbose)
     else:
         actions = {"deploy": deploy, "retreive": retreive, "diff": diff}
 
