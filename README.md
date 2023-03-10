@@ -51,7 +51,7 @@ under the filename specified by their key in the config file.
     - `-i` or `--ignore` - ignore the specified file. For multiple files, pass a comma-separated list of files.
 - `dotman retrieve` - retrieves all files in the config file from their respective locations, overwriting any existing files. It supports the same flags as `dotman deploy`.
 - `dotman diff` - shows the differences between the stored files and the deployed files. It supports the same flags as `dotman deploy` and `dotman retrieve`.
-- `dotman clean` Cleans up the store directory, removing any files that are not in the config file. Confirms deletion for each file one by one, unless `-a` or `--all` is specified, in which case it will confirm once for each category.
+- `dotman clean` Cleans up the store directory, removing any files that are not in the config file. Confirms deletion for each file one by one, unless `-a` or `--all` is specified, in which case it will confirm once before deleting all unmanaged files. `-v` or `--verbose` prints all the files that are being ignored.
 - `dotman git` allows controlling the git repo in the dotfile store directory. The git repo must be initialized manually before using this command.
     - `-a` or `--add` - adds files to the git repo. For multiple files, pass a space-separated list of files. For all files, pass `-a '.'` 
     - `-c` or `--commit` - commits staged files to the git repo. Pass a commit message as the argument.
