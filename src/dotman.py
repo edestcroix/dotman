@@ -8,6 +8,7 @@ import json
 import subprocess as sp
 from enum import Enum
 
+
 class Git(Enum):
     ADD = 0
     COMMIT = 1
@@ -16,18 +17,20 @@ class Git(Enum):
     RESTORE = 4
     CUSTOM = 5
 
+
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".config", "dotman", "config.json")
 
-class ConfigDict():
+
+class ConfigDict:
     def __init__(self, config_file):
-        self.__set_key = None;
+        self.__set_key = None
         # load config file with json
         with open(config_file, "r") as config_file:
             self.__config = json.load(config_file)
 
     def __getitem__(self, key):
         if self.__set_key:
-            return self.__config[self.__set_key][key]    
+            return self.__config[self.__set_key][key]
         # if a dot is in the key, we are trying to access a nested key
         if "." in key:
             keys = key.split(".")
@@ -36,15 +39,15 @@ class ConfigDict():
 
     def ck(self, key):
         # set the current key, so future __getattr__'s retreive
-        # only sub keys of the current key' 
+        # only sub keys of the current key'
         self.__set_key = key
+
     def rk(self):
         self.__set_key = None
 
-
     def flat_dotfiles(self):
         # return a dict with all dotfiles
-        dotfiles = self.__config['dotfiles']
+        dotfiles = self.__config["dotfiles"]
         # flatten the dict, to remove catagories
         flat_dotfiles = {}
         for catagory in dotfiles.keys():
@@ -54,17 +57,12 @@ class ConfigDict():
 
 def newer(dir_one, dir_two):
     diff = sp.run(["diff", "-q", dir_one, dir_two], capture_output=True)
-    return diff.returncode == 1 and os.path.getmtime(
-        dir_one
-    ) > os.path.getmtime(dir_two)
+    newest = lambda d1, d2: os.path.getmtime(d1) > os.path.getmtime(d2)
+    return diff.returncode == 1 and newest(dir_one, dir_two)
 
 
 def confirm_overwrite(dir_one, dir_two):
-    if (
-        os.path.exists(dir_one)
-        and os.path.exists(dir_two)
-        and newer(dir_one, dir_two)
-    ):
+    if os.path.exists(dir_one) and os.path.exists(dir_two) and newer(dir_one, dir_two):
         print(f"{dir_one} has been modified since {dir_two} was stored")
         if input("Overwrite? [y/N] ").lower() != "y":
             print(f"Skipping {dir_one}")
@@ -72,53 +70,71 @@ def confirm_overwrite(dir_one, dir_two):
     return True
 
 
-def deploy(store_dir, dotfiles, ignored=()):
-    for catagory in dotfiles.keys():
-        if not os.path.exists(os.path.join(store_dir, catagory)):
-            print(f"Skipping {catagory} because it has not been retreived")
-            continue
-        cur_dotfiles = dotfiles[catagory]
+def copy_file(src, dest, pad_out=0):
+    trim_src = re.sub(r"^.*/home/[^/]+", "~", src)
+    trim_dest = re.sub(r"^.*/home/[^/]+", "~", dest)
+    if os.path.exists(src):
+        if not os.path.exists(dirnm := os.path.dirname(dest)):
+            os.makedirs(dirnm)
+        if os.path.isdir(src):
+            sh.copytree(src, dest, dirs_exist_ok=True)
+            src = f"{src}/"
+            dest = f"{dest}/"
+        elif os.path.isfile(src):
+            sh.copyfile(src, dest)
+        else:
+            print(f"Not copying {src} because it is not a file or directory")
+        print(f"{trim_src:{pad_out}} -> {trim_dest}")
+    else:
+        print(f"Cannot copy because {src} does not exist")
+
+
+def longest_dir_len(dirs):
+    # get the longest string from the first element of
+    # each tuple in dirs
+    dirs = (re.sub(r"^.*/home/[^/]+", "~", dir[0]) for dir in dirs)
+    return max(len(s) for s in dirs)
+
+
+# since the only difference between deploy and retreive is the
+# direction of the copy, we can use the same functions for both
+# this function prepares the paths to copy, if outgoing is true,
+# it swaps the positions of paths in the return list
+# that is, if outgoing is true, the paths will be copied from
+# the store to the deploy locations, and vice-versa if false
+def prepare_copies(store_dir: str, dotfiles: dict, ignored: list, outgoing: bool):
+    paths_to_copy = []
+    for catagory, cur_dotfiles in dotfiles.items():
+        if not os.path.exists(cat_dir := os.path.join(store_dir, catagory)):
+            print(
+                f"Cannot copy because directory {cat_dir}/ does not exist"
+            ) if outgoing else os.makedirs(cat_dir)
+            exit(1)
+
         for dotfile in cur_dotfiles.keys():
             if dotfile in ignored:
-                continue
-            store_path = os.path.join(store_dir, catagory, dotfile)
-            deploy_path = os.path.expanduser(cur_dotfiles[dotfile])
-            
-            deploy_dir = os.path.dirname(deploy_path)
-            if confirm_overwrite(deploy_path, store_path):
-                if not os.path.exists(deploy_dir):
-                    os.makedirs(deploy_dir, exist_ok=True)
-                    sh.copytree(store_path, deploy_path, dirs_exist_ok=True)
-                    print(f"Deployed {dotfile} to {deploy_path}")
-                elif os.path.isfile(store_path):
-                    sh.copyfile(store_path, deploy_path)
-                    print(f"Deployed {dotfile} to {deploy_path}")
-                else:
-                    print(f"Cannot deploy {dotfile} because it does not exist")
+                print(f"Skipping {dotfile}")
+            else:
+                store_path = os.path.join(store_dir, catagory, dotfile)
+                deploy_path = os.path.expanduser(cur_dotfiles[dotfile])
+                paths_to_copy.append(
+                    (store_path, deploy_path) if outgoing else (deploy_path, store_path)
+                )
+    return paths_to_copy
 
 
-def retreive_file(dotfile, store_path, retreive_path):
-    if os.path.exists(retreive_path):
-        if os.path.isdir(retreive_path):
-            sh.copytree(retreive_path, store_path, dirs_exist_ok=True)
-        elif os.path.isfile(retreive_path):
-            sh.copy(retreive_path, store_path)
-    else:
-        print(f"Cannot retreive {dotfile} because {retreive_path} does not exist")
-    print(f"Retreived {dotfile} from {retreive_path}")
+def deploy(store_dir: str, dotfiles: dict, ignored=()):
+    paths_to_copy = prepare_copies(store_dir, dotfiles, ignored, True)
+    pad_len = longest_dir_len(paths_to_copy)
+    for store_path, deploy_path in paths_to_copy:
+        copy_file(store_path, deploy_path, pad_len)
 
 
 def retreive(store_dir: str, dotfiles: dict, ignored=()):
-    for catagory, cur_dotfiles in dotfiles.items():
-        os.makedirs(os.path.join(store_dir, catagory), exist_ok=True)
-        for dotfile in cur_dotfiles.keys():
-            # chech if the dotfile has a file extension when it's path is a directory
-            if dotfile in ignored:
-                print(f"Skipping {dotfile}")
-                continue
-            store_path = os.path.join(store_dir, catagory, dotfile)
-            retreive_path = os.path.expanduser(cur_dotfiles[dotfile])
-            retreive_file(dotfile, store_path, retreive_path)
+    paths_to_copy = prepare_copies(store_dir, dotfiles, ignored, False)
+    pad_len = longest_dir_len(paths_to_copy)
+    for retreive_path, store_path in paths_to_copy:
+        copy_file(retreive_path, store_path, pad_len)
 
 
 def diff(store_dir, dotfiles, ignored=()):
@@ -153,35 +169,29 @@ def list(store_dir, dotfiles, flat_dotfiles):
     dir_buf = 2
 
     # remove user portion, can be /home/user or /var/home/user
-    short_store_dir = re.sub(r'^.*/home/[^/]+', "~", store_dir)
+    short_store_dir = re.sub(r"^.*/home/[^/]+", "~", store_dir)
 
     print(f"Managed dotfiles ({len(flat_dotfiles)}/{len(dotfiles)}):")
     print("-" * (name_width + 60))
-    space = 0
-
     for catagory, cur_dotfiles in dotfiles.items():
         print(f"{catagory}:")
         cur_store_dir = os.path.join(store_dir, catagory)
-        for name, path in cur_dotfiles.items(): 
+        for name, path in cur_dotfiles.items():
             store_path = os.path.join(cur_store_dir, name)
-            d_name = f'{name}/' if os.path.isdir(store_path) else name
+            d_name = f"{name}/" if os.path.isdir(store_path) else name
             deploy_path = os.path.expanduser(path)
             is_stored = os.path.exists(store_path)
-            unstored_changes = newer(deploy_path, store_path)
-            undeployed_changes = newer(store_path, deploy_path)
-            if unstored_changes:
-                space += 1
-            if undeployed_changes:
-                space += 1
+            unstored_changes = int(newer(deploy_path, store_path))
+            undeployed_changes = int(newer(store_path, deploy_path))
+            space = unstored_changes + undeployed_changes
             print_s(f"  {name:{name_width}} ")
-            print_s("[")
-            print_s("s" if is_stored else " ")
-            print_s("!" if unstored_changes else '')
-            print_s("*" if undeployed_changes else '')
+            print_s("[s" if is_stored else "[ ")
+            print_s("!" if unstored_changes else "")
+            print_s("*" if undeployed_changes else "")
             print_s(f"{']':{dir_buf - space}}")
             print_s(f" {short_store_dir}/{catagory}/{d_name}")
             print(f" -> {re.sub(r'^.*/home/[^/]+', '~', deploy_path)}")
-            space = 0
+
 
 def confirm_bulk_clean(dir, files):
     print("Removing untracked files:")
@@ -189,10 +199,13 @@ def confirm_bulk_clean(dir, files):
         print(f"{dir}/{file}")
     return input("Are you sure you want to do this? [y/N] ").lower() in ["y", "yes"]
 
+
 def clean_file_set(store_dir, to_clean, always_yes, catagory=""):
     cleaned = 0
     for file in to_clean:
-        if always_yes or input(f"Remove untracked file {catagory}/{file}? [y/N] ").lower() in ["y", "yes"]:
+        if always_yes or input(
+            f"Remove untracked file {catagory}/{file}? [y/N] "
+        ).lower() in ["y", "yes"]:
             print(f"Removing {catagory}/{file}")
             if os.path.isdir(os.path.join(store_dir, catagory, file)):
                 sh.rmtree(os.path.join(store_dir, catagory, file))
@@ -201,10 +214,13 @@ def clean_file_set(store_dir, to_clean, always_yes, catagory=""):
             cleaned += 1
     return cleaned
 
+
 def clean(store_dir, dotfiles, ignored, always_yes=False):
-    ignored.append('.git')
+    ignored.append(".git")
     cleaned = 0
-    get_untracked = lambda dir, files : [file for file in dir if file not in files and file not in ignored]
+    get_untracked = lambda dir, files: [
+        file for file in dir if file not in files and file not in ignored
+    ]
     for catagory in dotfiles.keys():
         try:
             dir_files = os.listdir(os.path.join(store_dir, catagory))
@@ -218,33 +234,40 @@ def clean(store_dir, dotfiles, ignored, always_yes=False):
         # check root dir too
     root_dir_files = os.listdir(store_dir)
     untracked = get_untracked(root_dir_files, dotfiles.keys())
-    if untracked and always_yes and not confirm_bulk_clean('.', untracked):
+    if untracked and always_yes and not confirm_bulk_clean(".", untracked):
         return
 
     cleaned += clean_file_set(store_dir, untracked, always_yes)
-    
-    print(f"Cleaned {cleaned} file{'s' if cleaned > 1 else ''}") if cleaned > 0 else print("Nothing to clean")
+
+    print(
+        f"Cleaned {cleaned} file{'s' if cleaned > 1 else ''}"
+    ) if cleaned > 0 else print("Nothing to clean")
 
 
-def git(store_dir, action, commit_msg='dotman commit', override_cmd='', add='.', ssh_path=''):
+def git(
+    store_dir, action, commit_msg="dotman commit", override_cmd="", add=".", ssh_path=""
+):
     git_path = os.path.expanduser(f"{store_dir}")
     if action == Git.ADD:
-        sp.run(["git", "-C", git_path, "add", *add.split(' ')])
+        sp.run(["git", "-C", git_path, "add", *add.split(" ")])
     if action == Git.COMMIT:
-        if sp.run(["git", "-C", git_path, "diff-index", "--quiet", "HEAD", "--"]).returncode == 0:
+        if (
+            sp.run(
+                ["git", "-C", git_path, "diff-index", "--quiet", "HEAD", "--"]
+            ).returncode
+            == 0
+        ):
             print("No changes to commit")
         else:
-            sp.run(["git", "-C", git_path, "commit", "-m", commit_msg]) 
+            sp.run(["git", "-C", git_path, "commit", "-m", commit_msg])
 
     if action == Git.PUSH:
         output = sp.run(["git", "-C", git_path, "push"], capture_output=True)
-        check = output.stderr.decode('utf-8')
+        check = output.stderr.decode("utf-8")
         if "Permission denied (publickey)" in check:
             if ssh_path:
                 sp.run(["ssh-add", os.path.expanduser(ssh_path)])
-            elif ssh_key := input(
-                "SSH key not found, please enter path to ssh key: "
-            ):
+            elif ssh_key := input("SSH key not found, please enter path to ssh key: "):
                 sp.run(["ssh-add", os.path.expanduser(ssh_key)])
             else:
                 print("No SSH key provided, exiting")
@@ -256,12 +279,12 @@ def git(store_dir, action, commit_msg='dotman commit', override_cmd='', add='.',
         sp.run(["git", "-C", git_path, "status"])
 
     if action == Git.CUSTOM:
-        git = sp.run(["git", "-C", git_path, *override_cmd.split(' ')])
+        git = sp.run(["git", "-C", git_path, *override_cmd.split(" ")])
         if git.stdout:
             print(git.stdout)
 
 
-def git_action(store_dir, args, ssh=''):
+def git_action(store_dir, args, ssh=""):
     # add, commit, and push can be specified together,
     # all others are mutually exclusive
     if args.add and args.commit:
@@ -269,7 +292,6 @@ def git_action(store_dir, args, ssh=''):
         git(store_dir, Git.COMMIT, commit_msg=args.commit)
         if args.push:
             git(store_dir, Git.PUSH)
-
     elif args.commit:
         git(store_dir, Git.COMMIT, commit_msg=args.commit)
     elif args.status:
@@ -279,14 +301,12 @@ def git_action(store_dir, args, ssh=''):
     elif args.command:
         git(store_dir, Git.CUSTOM, override_cmd=args.command)
     elif args.diff:
-        git(store_dir, Git.CUSTOM, override_cmd='diff')
+        git(store_dir, Git.CUSTOM, override_cmd="diff")
     elif args.add:
         git(store_dir, Git.ADD, add=args.add)
     elif args.restore:
-        git(store_dir, Git.CUSTOM, override_cmd=f'restore --staged {args.restore}')
-            
+        git(store_dir, Git.CUSTOM, override_cmd=f"restore --staged {args.restore}")
 
-def get_args():
 
     parser = argparse.ArgumentParser(description="Dotman is a tool for managing dotfiles")
     parser.add_argument("-c", "--config", help="Specify config file", action="store")
