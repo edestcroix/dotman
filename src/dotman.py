@@ -308,39 +308,46 @@ def git_action(store_dir, args, ssh=""):
         git(store_dir, Git.CUSTOM, override_cmd=f"restore --staged {args.restore}")
 
 
-    parser = argparse.ArgumentParser(description="Dotman is a tool for managing dotfiles")
-    parser.add_argument("-c", "--config", help="Specify config file", action="store")
-    parser.add_argument("-l", "--list", help="List managed dotfiles", action="store_true")
+def get_args():
+    parser = argparse.ArgumentParser(
+        description="Dotman is a tool for managing dotfiles"
+    )
+    cur_parser = parser
+    # simple wrapper to make adding arguments easier
+    add_arg = lambda arg, **kwargs: cur_parser.add_argument(arg[1:3], arg, **kwargs)
+
+    # global arguments
+    add_arg("--config", help="Specify config file", action="store")
+    add_arg("--list", help="List managed dotfiles", action="store_true")
+
+    # subparsers
     subparsers = parser.add_subparsers(dest="subparser_name")
 
-    deploy_parser = subparsers.add_parser("deploy")
-    deploy_parser.add_argument("-a", "--all", help="Deploy all dotfiles", action="store_true")
-    deploy_parser.add_argument("-f", "--file", help="Deploy a specific dotfile", action="store")
-    deploy_parser.add_argument("-i", "--ignore", help="Ignore a specific dotfile", action="store")
+    # deploy, retreive, diff share the exact same arguments.
+    for parser_name in ["deploy", "retreive", "diff"]:
+        cur_parser = subparsers.add_parser(parser_name)
+        add_arg("--all", help="Operate on all dotfiles", action="store_true")
+        add_arg("--file", help="Operate on a specific dotfile", action="store")
+        add_arg("--ignore", help="Ignore a specific dotfile", action="store")
 
-    retreive_parser = subparsers.add_parser("retreive")
-    retreive_parser.add_argument("-a", "--all", help="Retreive all dotfiles", action="store_true")
-    retreive_parser.add_argument("-f", "--file", help="Retreive a specific dotfile", action="store")
-    retreive_parser.add_argument("-i", "--ignore", help="Ignore a specific dotfile", action="store")
+    # TODO: Clean should be added to the for loop above, and given
+    # same functionality as deploy, retreive, and diff
+    cur_parser = subparsers.add_parser("clean")
+    add_arg("--all", help="Clean all dotfiles", action="store_true")
 
-    diff_parser = subparsers.add_parser("diff")
-    diff_parser.add_argument("-a", "--all", help="Diff all dotfiles", action="store_true")
-    diff_parser.add_argument("-f", "--file", help="Diff a specific dotfile", action="store")
-    diff_parser.add_argument("-i", "--ignore", help="Ignore a specific dotfile", action="store")
+    cur_parser = subparsers.add_parser("git")
+    add_arg("--add", help="Add dotfiles to dotfile repo", action="store", default="")
+    add_arg("--restore", help="restore staged dotfiles", action="store", default="")
+    add_arg("--commit", help="commit dotfiles to dotfile repo", action="store")
+    add_arg("--push", help="push dotfiles to dotfile repo", action="store_true")
+    add_arg("--status", help="show git status of dotfile repo", action="store_true")
+    add_arg("--diff", help="show git diff of dotfile repo", action="store_true")
 
-    clean_parser = subparsers.add_parser("clean")
-    clean_parser.add_argument("-a", "--all", help="Clean all dotfiles", action="store_true")
-
-
-    git_parser = subparsers.add_parser("git")
-    git_parser.add_argument("-a", "--add", help="Add dotfiles to dotfile repo", action="store", default="")
-    git_parser.add_argument('-r', "--restore", help="restore staged dotfiles", action="store", default='')
-    git_parser.add_argument("-c", "--commit", help="commit dotfiles to dotfile repo", action="store", type=str)
-    git_parser.add_argument("-p", "--push", help="push dotfiles to dotfile repo", action="store_true")
-    git_parser.add_argument("-s", "--status", help="show git status of dotfile repo", action="store_true")
-    git_parser.add_argument("-C", "--command", help="run specific git command", action="store")
-    # add diff argument
-    git_parser.add_argument("-d", "--diff", help="show git diff of dotfile repo", action="store_true")
+    # this one can't be added with add_arg because it's single letter flag
+    # needs to be capitalized.
+    cur_parser.add_argument(
+        "-C", "--command", help="run specific git command", action="store"
+    )
 
     return parser.parse_args()
 
@@ -349,13 +356,17 @@ def main():
     args = get_args()
 
     config = ConfigDict(args.config or CONFIG_PATH)
-    store_dir = os.path.expanduser(config['store_dir'])
+    store_dir = os.path.expanduser(config["store_dir"])
 
     if args.subparser_name is None:
         if args.list:
             list(store_dir, config["dotfiles"], config.flat_dotfiles())
     elif args.subparser_name == "git":
-        ssh = config["git"]["ssh_key_path"] if "ssh_key_path" in config["git"] else ''
+        ssh = (
+            config["git"]["ssh_key_path"]
+            if config["git"] and "ssh_key_path" in config["git"]
+            else ""
+        )
         git_action(store_dir, args, ssh)
     elif args.subparser_name == "clean":
         clean(store_dir, config["dotfiles"], config["ignored_files"], args.all)
@@ -365,15 +376,15 @@ def main():
         # if args.files is specified, filter out the dotfiles dict to only contain
         # the specified files, still in the same catagories
         if file := args.file:
-            file = file.split(',')
+            file = file.split(",")
             dotfiles = {
                 catagory: {k: v for k, v in dotfiles_set.items() if k in file}
-                for catagory, dotfiles_set in config['dotfiles'].items()
+                for catagory, dotfiles_set in config["dotfiles"].items()
             }
         else:
-            dotfiles = config['dotfiles']
+            dotfiles = config["dotfiles"]
 
-        ignored = args.ignore.split(',') if args.ignore else []
+        ignored = args.ignore.split(",") if args.ignore else []
         actions[args.subparser_name](store_dir, dotfiles, ignored=ignored)
 
 
