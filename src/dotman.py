@@ -19,6 +19,7 @@ class Git(Enum):
 
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".config", "dotman", "config.json")
+BACKUP_PATH = os.path.join(os.path.expanduser("~"), ".local/share", "dotman")
 
 
 class ConfigDict:
@@ -55,17 +56,70 @@ class ConfigDict:
         return flat_dotfiles
 
 
-def newer(dir_one, dir_two):
-    diff = sp.run(["diff", "-q", dir_one, dir_two], capture_output=True)
-    newest = lambda d1, d2: os.path.getmtime(d1) > os.path.getmtime(d2)
-    return diff.returncode == 1 and newest(dir_one, dir_two)
+# NOTE: This might be better if instead of diffing a backup,
+# just check if the stored file is different from the
+# one in the git repo.
 
 
-def confirm_overwrite(dir_one, dir_two):
-    if os.path.exists(dir_one) and os.path.exists(dir_two) and newer(dir_one, dir_two):
-        print(f"{dir_one} has been modified since {dir_two} was stored")
+# Performs a three-way diff between the source, deploy,
+# and backup files. Returns 0 if the store and deploy
+# are the same, 1 if the store and backup are the same,
+# 2 if both the store and backup are different from the deploy,
+# and -1 if only the store and backup are different from the deploy
+def diff_status(store_dir, store, deploy):
+    diff = sp.run(["diff", "-bur", store, deploy], capture_output=True)
+    output = diff.stdout.decode("utf-8")
+    # the output contains lines starting with ---
+    # and +++. These will be sequential. For every
+    # --- line, add it to a pair with the +++ line
+    # that follows it and store in list
+    output = output.splitlines()
+    diff_pairs = [
+        (line, output[i + 1])
+        for i, line in enumerate(output)
+        if line.startswith("---")
+    ] 
+    # for each diff pair,
+    # parse the timestamps from the strings
+    if not diff_pairs:
+        return 0
+    pair = diff_pairs[0]
+    # at this point, the diff is between the stored file and the
+    # deployed file. If the stored file differs from the
+    # backup file, return True, because both files have
+    # changed since the last retrieval
+
+
+
+    dir_one_file = pair[0].split()[1]
+    dir_two_file = pair[1].split()[1]
+
+    # new idea: at this point, we know that 
+    # dir_one_file and dir_two_file are different
+    # so check the git repo in store_dir.
+    # if dir_one_file is in sync with the git repo,
+    # then return 1, since only the deployed file is changed.
+    # if dir_one_file is not in sync with 
+
+    backup = dir_one_file.replace(store_dir, BACKUP_PATH)
+
+    backup_diff_one = sp.run(["diff", "-q", dir_one_file, backup], capture_output=True).returncode
+    backup_diff_two = sp.run(["diff", "-q", dir_two_file, backup], capture_output=True).returncode
+
+    print(backup_diff_one, backup_diff_two)
+        
+    # return -1 if only backup_diff_one is one 
+    if backup_diff_one == 1 and backup_diff_two == 0:
+        return -1
+    if backup_diff_one == 0 and backup_diff_two == 1:
+        return 1
+    return backup_diff_one + backup_diff_two
+
+def confirm_overwrite(store_dir, dir_one, dir_two):
+    if os.path.exists(dir_one) and os.path.exists(dir_two) and diff_status(store_dir, dir_one, dir_two):
+        print(f"{collapse_user(dir_one)} has been modified since {collapse_user(dir_two)} was stored")
         if input("Overwrite? [y/N] ").lower() != "y":
-            print(f"Skipping {dir_one}")
+            print(f"Skipping {collapse_user(dir_one)}")
             return False
     return True
 
@@ -73,7 +127,8 @@ def confirm_overwrite(dir_one, dir_two):
 def collapse_user(string):
     return re.sub(r"^.*/home/[^/]+", "~", string)
 
-def copy_file(src, dest, pad_out=0):
+def copy_file(src, dest, pad_out=0, silent=False):
+    s_print = lambda *args: None if silent else print(*args)
     trim_src = collapse_user(src)
     trim_dest = collapse_user(dest)
     if os.path.exists(src):
@@ -86,10 +141,10 @@ def copy_file(src, dest, pad_out=0):
         elif os.path.isfile(src):
             sh.copyfile(src, dest)
         else:
-            print(f"Not copying {src} because it is not a file or directory")
-        print(f"{trim_src:{pad_out}} -> {trim_dest}")
+            s_print(f"Not copying {src} because it is not a file or directory")
+        s_print(f"{trim_src:{pad_out}} -> {trim_dest}")
     else:
-        print(f"Cannot copy because {src} does not exist")
+        s_print(f"Cannot copy because {src} does not exist")
 
 
 def longest_dir_len(dirs):
@@ -105,7 +160,7 @@ def longest_dir_len(dirs):
 # it swaps the positions of paths in the return list
 # that is, if outgoing is true, the paths will be copied from
 # the store to the deploy locations, and vice-versa if false
-def prepare_copies(store_dir: str, dotfiles: dict, ignored: list, outgoing: bool):
+def prepare_copies(store_dir: str, dotfiles: dict, ignored: list, outgoing: bool, backup=None):
     paths_to_copy = []
     for catagory, cur_dotfiles in dotfiles.items():
         if not os.path.exists(cat_dir := os.path.join(store_dir, catagory)):
@@ -119,10 +174,21 @@ def prepare_copies(store_dir: str, dotfiles: dict, ignored: list, outgoing: bool
                 print(f"Skipping {dotfile}")
             else:
                 store_path = os.path.join(store_dir, catagory, dotfile)
-                deploy_path = os.path.expanduser(cur_dotfiles[dotfile])
-                paths_to_copy.append(
-                    (store_path, deploy_path) if outgoing else (deploy_path, store_path)
-                )
+
+                if backup:
+                    deploy_path = os.path.join(backup, catagory, dotfile)
+                else:
+                    deploy_path = os.path.expanduser(cur_dotfiles[dotfile])
+                # confirm overwrite if both files exist and the deployment
+                # file has been modified since the last time the store file
+                # was updated
+                if outgoing and confirm_overwrite(store_dir, deploy_path, store_path):
+                    paths_to_copy.append(
+                        (store_path, deploy_path)
+                    )
+                elif not outgoing:
+                    paths_to_copy.append((deploy_path, store_path))
+
     return paths_to_copy
 
 
@@ -135,9 +201,21 @@ def deploy(store_dir: str, dotfiles: dict, ignored=()):
 
 def retreive(store_dir: str, dotfiles: dict, ignored=()):
     paths_to_copy = prepare_copies(store_dir, dotfiles, ignored, False)
+    sh.rmtree(BACKUP_PATH)
+    os.makedirs(BACKUP_PATH, exist_ok=True)
+    backup_copies = prepare_copies(store_dir, dotfiles, ignored, True, BACKUP_PATH)
     pad_len = longest_dir_len(paths_to_copy)
+
     for retreive_path, store_path in paths_to_copy:
         copy_file(retreive_path, store_path, pad_len)
+
+    # also copy the just-retrieve files into the
+    # backup directory. This is so that the backup
+    # is always up to date so three-way diffs
+    # can be performed.
+    for store_path, deploy_path in backup_copies:
+        copy_file(store_path, deploy_path, pad_len, True)
+
 
 
 def diff(store_dir, dotfiles, ignored=()):
@@ -184,14 +262,12 @@ def list_dotfiles(store_dir, dotfiles, flat_dotfiles):
             d_name = f"{name}/" if os.path.isdir(store_path) else name
             deploy_path = os.path.expanduser(path)
             is_stored = os.path.exists(store_path)
-            unstored_changes = int(newer(deploy_path, store_path))
-            undeployed_changes = int(newer(store_path, deploy_path))
-            space = unstored_changes + undeployed_changes
+            state = diff_status(store_dir, store_path, deploy_path)
             print_s(f"  {name:{name_width}} ")
             print_s("[s" if is_stored else "[ ")
-            print_s("!" if unstored_changes else "")
-            print_s("*" if undeployed_changes else "")
-            print_s(f"{']':{dir_buf - space}}")
+            print_s("<" if state >= 1 else "")
+            print_s(">" if state in (-1, 2) else "")
+            print_s(f"{']':{dir_buf - state}}")
             print_s(f" {short_store_dir}/{catagory}/{d_name}")
             print(f" -> {re.sub(r'^.*/home/[^/]+', '~', deploy_path)}")
 
