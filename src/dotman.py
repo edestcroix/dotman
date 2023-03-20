@@ -6,16 +6,6 @@ import re
 import shutil as sh
 import json
 import subprocess as sp
-from enum import Enum
-
-
-class Git(Enum):
-    ADD = 0
-    COMMIT = 1
-    PUSH = 2
-    STATUS = 3
-    RESTORE = 4
-    CUSTOM = 5
 
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".config", "dotman", "config.json")
@@ -260,70 +250,52 @@ def clean(store_dir, dotfiles, ignored, all_one_shot=False, verbose=False):
         print("No untracked files to clean")
 
 
-
-# TODO: Clean up the git functions
-def git(
-    store_dir, action, commit_msg="dotman commit", override_cmd="", add=".", ssh_path=""
-):
+def git(store_dir, cmd="", ssh_path="", commit_msg=""):
+    cmd = cmd.strip()
     git_path = os.path.expanduser(f"{store_dir}")
-    if action == Git.ADD:
-        sp.run(["git", "-C", git_path, "add", *add.split(" ")])
-    if action == Git.COMMIT:
-        if (
-            sp.run(
-                ["git", "-C", git_path, "diff-index", "--quiet", "HEAD", "--"]
-            ).returncode
-            == 0
-        ):
-            print("No changes to commit")
+    if cmd == "push":
+        git = sp.run(["git", "-C", git_path, "push", "origin", "main"], capture_output=True)
+    elif commit_msg:
+     git = sp.run(["git", "-C", git_path, *cmd.split(" "), commit_msg], capture_output=True)   
+    else:
+        git = sp.run(["git", "-C", git_path, *cmd.split(" ")], capture_output=True)
+
+    git_err = git.stderr.decode("utf-8")
+    git_output = git.stdout.decode("utf-8")
+
+    print(git_output)
+
+    if "Permission denied (publickey)" in git_err:
+        if ssh_path:
+            sp.run(["ssh-add", os.path.expanduser(ssh_path)])
+        elif ssh_key := input("SSH key not found, please enter path to ssh key: "):
+            sp.run(["ssh-add", os.path.expanduser(ssh_key)])
         else:
-            sp.run(["git", "-C", git_path, "commit", "-m", commit_msg])
+            print("No SSH key provided, exiting")
+        sp.run(["git", "-C", git_path, "push", "origin", "main"])
 
-    if action == Git.PUSH:
-        output = sp.run(["git", "-C", git_path, "push"], capture_output=True)
-        check = output.stderr.decode("utf-8")
-        if "Permission denied (publickey)" in check:
-            if ssh_path:
-                sp.run(["ssh-add", os.path.expanduser(ssh_path)])
-            elif ssh_key := input("SSH key not found, please enter path to ssh key: "):
-                sp.run(["ssh-add", os.path.expanduser(ssh_key)])
-            else:
-                print("No SSH key provided, exiting")
-            sp.run(["git", "-C", git_path, "push"])
-        else:
-            print(check)
-
-    if action == Git.STATUS:
-        sp.run(["git", "-C", git_path, "status"])
-
-    if action == Git.CUSTOM:
-        git = sp.run(["git", "-C", git_path, *override_cmd.split(" ")])
-        if git.stdout:
-            print(git.stdout)
-
+    elif git_err:
+        print(git_err)
 
 def git_action(store_dir, args, ssh=""):
-    # add, commit, and push can be specified together,
-    # all others are mutually exclusive
-    if args.add and args.commit:
-        git(store_dir, Git.ADD, add=args.add)
-        git(store_dir, Git.COMMIT, commit_msg=args.commit)
+    if args.add or args.commit or args.push:
+        # add, commit, and push can be specified together,
+        # all others are mutually exclusive
+        if args.add:
+            git(store_dir, f"add {args.add}")
+        if args.commit:
+            git(store_dir, "commit -m", commit_msg=args.commit)
         if args.push:
-            git(store_dir, Git.PUSH)
-    elif args.commit:
-        git(store_dir, Git.COMMIT, commit_msg=args.commit)
+            git(store_dir, "push", ssh_path=ssh)
+    # every other action is mutually exclusive
     elif args.status:
-        git(store_dir, Git.STATUS)
-    elif args.push:
-        git(store_dir, Git.PUSH, ssh_path=ssh)
+        git(store_dir, "status")
     elif args.command:
-        git(store_dir, Git.CUSTOM, override_cmd=args.command)
+        git(store_dir, args.command)
     elif args.diff:
-        git(store_dir, Git.CUSTOM, override_cmd="diff")
-    elif args.add:
-        git(store_dir, Git.ADD, add=args.add)
+        git(store_dir, "diff")
     elif args.restore:
-        git(store_dir, Git.CUSTOM, override_cmd=f"restore --staged {args.restore}")
+        git(store_dir, f"restore --staged {args.restore}")
 
 
 def get_args():
