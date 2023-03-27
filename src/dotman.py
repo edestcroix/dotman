@@ -45,6 +45,7 @@ class ConfigDict:
             flat_dotfiles |= dotfiles[catagory]
         return flat_dotfiles
 
+
 # diff the stored file with the deploy file
 # if returns the result of the diff if there is a diff
 # None otherwise
@@ -52,9 +53,16 @@ def diff_status(store, deploy):
     diff = sp.run(["diff", "-bur", store, deploy], capture_output=True)
     return diff.stdout.decode("utf-8")
 
+
 def confirm_overwrite(dir_one, dir_two):
-    if os.path.exists(dir_one) and os.path.exists(dir_two) and diff_status(dir_one, dir_two):
-        print(f"{collapse_user(dir_one)} has been modified since {collapse_user(dir_two)} was stored")
+    if (
+        os.path.exists(dir_one)
+        and os.path.exists(dir_two)
+        and diff_status(dir_one, dir_two)
+    ):
+        print(
+            f"{collapse_user(dir_one)} has been modified since {collapse_user(dir_two)} was stored"
+        )
         if input("Overwrite? [y/N] ").lower() != "y":
             print(f"Skipping {collapse_user(dir_one)}")
             return False
@@ -63,6 +71,7 @@ def confirm_overwrite(dir_one, dir_two):
 
 def collapse_user(string):
     return re.sub(r"^.*/home/[^/]+", "~", string)
+
 
 def copy_file(src, dest, pad_out=0, silent=False):
     s_print = lambda *args: None if silent else print(*args)
@@ -101,7 +110,9 @@ def longest_dir_len(dirs):
 # the files have been modified since they were last stored
 # (assumed use of dotman is that the store-files shouldn't be edited,
 #   so if the files are different, assume it's the deployed one)
-def prepare_copies(store_dir: str, dotfiles: dict, ignored: list, outgoing: bool, backup=None):
+def prepare_copies(
+    store_dir: str, dotfiles: dict, ignored: list, outgoing: bool, backup=None
+):
     paths_to_copy = []
     for catagory, cur_dotfiles in dotfiles.items():
         if not os.path.exists(cat_dir := os.path.join(store_dir, catagory)):
@@ -124,9 +135,7 @@ def prepare_copies(store_dir: str, dotfiles: dict, ignored: list, outgoing: bool
                 # file has been modified since the last time the store file
                 # was updated
                 if outgoing and confirm_overwrite(deploy_path, store_path):
-                    paths_to_copy.append(
-                        (store_path, deploy_path)
-                    )
+                    paths_to_copy.append((store_path, deploy_path))
                 elif not outgoing:
                     paths_to_copy.append((deploy_path, store_path))
 
@@ -163,7 +172,7 @@ def diff(store_dir, dotfiles, ignored=()):
             if not os.path.exists(source_path):
                 print(f"Cannot diff {source_path} because it does not exist")
                 continue
-            diff = sp.run(["diff", "-u", source_path, store_path], capture_output=True)
+            diff = sp.run(["diff", "-u", store_path, source_path], capture_output=True)
             if diff.returncode == 1:
                 are_diffs = True
                 print(diff.stdout.decode("utf-8"))
@@ -217,7 +226,8 @@ def clean_file_set(store_dir, to_clean, always_yes):
 
 
 def get_untracked(store_dir, dir, ignored):
-        return [f"{store_dir}/{file}" for file in dir if file not in ignored]
+    return [f"{store_dir}/{file}" for file in dir if file not in ignored]
+
 
 def clean(store_dir, dotfiles, ignored, all_one_shot=False, verbose=False):
     ignored.append(".git")
@@ -241,10 +251,10 @@ def clean(store_dir, dotfiles, ignored, all_one_shot=False, verbose=False):
     if all_one_shot and untracked:
         print("Removing untracked files:")
         for file in untracked:
-            print(collapse_user(file))    
-        if input("Are you sure (y/N): ").lower() in ('y' or 'yes'):
+            print(collapse_user(file))
+        if input("Are you sure (y/N): ").lower() in ("y" or "yes"):
             clean_file_set(store_dir, untracked, True)
-    elif untracked: 
+    elif untracked:
         clean_file_set(store_dir, untracked, False)
     else:
         print("No untracked files to clean")
@@ -254,16 +264,19 @@ def git(store_dir, cmd="", ssh_path="", commit_msg=""):
     cmd = cmd.strip()
     git_path = os.path.expanduser(f"{store_dir}")
     if cmd == "push":
-        git = sp.run(["git", "-C", git_path, "push", "origin", "main"], capture_output=True)
+        git = sp.run(
+            ["git", "-C", git_path, "push", "origin", "main"], capture_output=True
+        )
     elif commit_msg:
-     git = sp.run(["git", "-C", git_path, *cmd.split(" "), commit_msg], capture_output=True)   
+        git = sp.run(
+            ["git", "-C", git_path, *cmd.split(" "), commit_msg], capture_output=True
+        )
     else:
         git = sp.run(["git", "-C", git_path, *cmd.split(" ")], capture_output=True)
 
-    git_err = git.stderr.decode("utf-8")
-    git_output = git.stdout.decode("utf-8")
-
-    print(git_output)
+    git_err = git.stderr.decode("utf-8").strip()
+    if git_output := git.stdout.decode("utf-8").strip():
+        print(git_output)
 
     if "Permission denied (publickey)" in git_err:
         if ssh_path:
@@ -276,6 +289,7 @@ def git(store_dir, cmd="", ssh_path="", commit_msg=""):
 
     elif git_err:
         print(git_err)
+
 
 def git_action(store_dir, args, ssh=""):
     if args.add or args.commit or args.push:
@@ -290,12 +304,12 @@ def git_action(store_dir, args, ssh=""):
     # every other action is mutually exclusive
     elif args.status:
         git(store_dir, "status")
-    elif args.command:
-        git(store_dir, args.command)
     elif args.diff:
         git(store_dir, "diff")
     elif args.restore:
         git(store_dir, f"restore --staged {args.restore}")
+    elif args.command:
+        git(store_dir, args.command)
 
 
 def get_args():
